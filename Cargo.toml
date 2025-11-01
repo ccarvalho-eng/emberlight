@@ -1,0 +1,9 @@
+[package]
+name = "emberlight"
+version = "0.1.0"
+edition = "2021"
+authors = ["Emberlight Studios"]
+description = "An interactive turn-based RPG adventure in a dark fantasy world"
+
+[dependencies]
+rand = "0.9.2"
