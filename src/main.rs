@@ -1,16 +1,20 @@
 mod character;
 mod enemy;
 mod inventory;
+mod narrative;
 mod ui;
 
 use std::io::{self, Write};
 
+use rand::Rng;
+
 use character::{Character, Combat, Fighter, Mage, Rogue, Warrior};
 use enemy::Enemy;
 use inventory::Item;
+use narrative::{Location, Narrative, RandomEvent};
 use ui::{
     print_banner, print_divider, print_enemy_stats, print_health_bar, print_resource_bar,
-    show_character_stats, show_inventory,
+    show_character_stats,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -21,6 +25,7 @@ fn main() -> Result<()> {
 
 fn run_game() -> Result<()> {
     print_banner();
+    println!("{}", Narrative::opening_verse());
 
     // Character selection
     let mut player_character = select_character();
@@ -41,11 +46,61 @@ fn run_game() -> Result<()> {
     let mut battle_count = 0;
     loop {
         battle_count += 1;
+
+        // Random travel event
+        if let Some(event) = RandomEvent::try_trigger() {
+            println!("{}", event);
+            std::thread::sleep(std::time::Duration::from_millis(800));
+        }
+
+        // Travel verse
+        println!("{}", Narrative::random_travel_verse());
+        std::thread::sleep(std::time::Duration::from_millis(600));
+
         print_divider();
         println!("╔════════════════════════════════════════╗");
         println!("║       ENCOUNTER #{:<2}                   ║", battle_count);
-        println!("╚════════════════════════════════════════╝");
+        println!("╚════════════════════════════════════════╝\n");
 
+        // Location-based encounter
+        let location = Location::random(battle_count);
+        println!("{}\n", location.description());
+
+        // Show location actions
+        let actions = location.available_actions();
+        if !actions.is_empty() {
+            println!("┌────────────────────────────────────────┐");
+            println!("│  What would you like to do?            │");
+            println!("├────────────────────────────────────────┤");
+            for (i, action) in actions.iter().enumerate() {
+                println!("│  [{}] {:<35}│", i + 1, action.name());
+            }
+            println!("│  [0] Press onward                      │");
+            println!("└────────────────────────────────────────┘");
+            print!("\n➤ Choose: ");
+            let _ = io::stdout().flush();
+
+            let max_choice = actions.len() as u32;
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_ok() {
+                if let Ok(choice) = input.trim().parse::<u32>() {
+                    if choice > 0 && choice <= max_choice {
+                        let action = &actions[(choice - 1) as usize];
+                        let result = action.execute(&mut player_character, &mut gold);
+                        println!("\n{}\n", result);
+                        std::thread::sleep(std::time::Duration::from_millis(800));
+                    }
+                }
+            }
+        }
+
+        // Boss warning
+        if battle_count % 5 == 0 {
+            println!("{}", Narrative::boss_approach_verse());
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+        }
+
+        println!("\n{}", location.encounter_intro());
         let mut enemy = spawn_enemy(battle_count);
         println!(
             "\n⚠️  A wild {} (Level {}) appears!",
@@ -58,6 +113,7 @@ fn run_game() -> Result<()> {
         let won = battle(&mut player_character, &mut enemy, &mut inventory);
 
         if !won {
+            println!("{}", Narrative::death_verse());
             print_divider();
             println!("╔════════════════════════════════════════╗");
             println!("║          GAME OVER                     ║");
@@ -71,6 +127,7 @@ fn run_game() -> Result<()> {
         }
 
         // Victory rewards
+        println!("{}", Narrative::victory_verse());
         let reward_gold = 20 + (battle_count * 5);
         gold += reward_gold;
         println!("\n╔════════════════════════════════════════╗");
@@ -80,11 +137,35 @@ fn run_game() -> Result<()> {
         println!("║  Total Gold: {} coins                 ║", gold);
         println!("╚════════════════════════════════════════╝");
 
-        // Random loot
-        if battle_count % 2 == 0 {
-            let item = Item::new(String::from("Health Potion"), POTION_VALUE);
-            println!("\n🎁 You found a {}!", item.name());
+        // Random loot with better chance after boss battles
+        let mut rng = rand::rng();
+        let loot_chance = if battle_count % 5 == 0 {
+            100 // Always drop loot after boss
+        } else {
+            rng.random_range(1..=100)
+        };
+
+        if loot_chance > 40 {
+            let item = Item::random_loot();
+            let rarity = if item.value() >= 500 {
+                "\x1b[95m★★★ LEGENDARY ★★★\x1b[0m"
+            } else if item.value() >= 150 {
+                "\x1b[93m★★ RARE ★★\x1b[0m"
+            } else if item.value() >= 60 {
+                "\x1b[92m★ UNCOMMON ★\x1b[0m"
+            } else {
+                "Common"
+            };
+
+            println!(
+                "\n🎁 {} You found a \x1b[96m{}\x1b[0m! (Value: {}g)",
+                rarity,
+                item.name(),
+                item.value()
+            );
             inventory.push(item);
+        } else {
+            println!("\n💨 The enemy had no loot to speak of.");
         }
 
         // Main menu
@@ -107,7 +188,7 @@ fn run_game() -> Result<()> {
                     show_character_stats(&*player_character, gold, battle_count);
                 }
                 3 => {
-                    show_inventory(&inventory, gold);
+                    use_inventory_menu(&mut player_character, &mut inventory, gold);
                 }
                 4 => {
                     print_divider();
@@ -193,15 +274,24 @@ fn get_user_choice(max: u32) -> u32 {
 }
 
 fn spawn_enemy(encounter: u32) -> Enemy {
-    match encounter {
-        1 => Enemy::goblin(1),
-        2 => Enemy::goblin(2),
-        3 => Enemy::orc(2),
-        4 => Enemy::orc(3),
-        _ => {
-            let level = if encounter > 2 { encounter - 2 } else { 1 };
-            Enemy::dragon(level)
-        }
+    let mut rng = rand::rng();
+
+    // Boss every 5 encounters
+    if encounter % 5 == 0 {
+        let level = encounter / 5 + 2;
+        return Enemy::dragon(level);
+    }
+
+    // Random enemy with level scaling
+    let level = 1 + (encounter / 2);
+    let enemy_type = rng.random_range(1..=100);
+
+    if enemy_type <= 50 {
+        Enemy::goblin(level)
+    } else if enemy_type <= 85 {
+        Enemy::orc(level)
+    } else {
+        Enemy::dragon(level)
     }
 }
 
@@ -250,12 +340,27 @@ fn battle(player: &mut Box<dyn Fighter>, enemy: &mut Enemy, inventory: &mut Vec<
 
         match get_user_choice(4) {
             1 => {
-                let damage = player.attack();
-                println!("\n💥 You attack for {} damage!", damage);
+                let mut rng = rand::rng();
+                let base_damage = player.attack();
+                let variance = rng.random_range(0.85..=1.15);
+                let mut damage = (base_damage as f32 * variance) as u32;
+
+                // Critical hit chance
+                let crit_chance = rng.random_range(1..=100);
+                if crit_chance > 85 {
+                    damage = (damage as f32 * 1.5) as u32;
+                    println!("\n\x1b[91m⚡ CRITICAL HIT! ⚡\x1b[0m");
+                    println!("💥 You attack for \x1b[93m{} damage!\x1b[0m", damage);
+                } else {
+                    println!("\n💥 You attack for {} damage!", damage);
+                }
                 enemy.take_damage(damage);
             }
             2 => {
-                if let Some(damage) = player.special_ability() {
+                if let Some(base_damage) = player.special_ability() {
+                    let mut rng = rand::rng();
+                    let variance = rng.random_range(0.9..=1.1);
+                    let damage = (base_damage as f32 * variance) as u32;
                     enemy.take_damage(damage);
                 } else {
                     println!("\n⚠️  Turn wasted!");
@@ -289,8 +394,24 @@ fn battle(player: &mut Box<dyn Fighter>, enemy: &mut Enemy, inventory: &mut Vec<
         println!("\n╔════════════════════════════════════════╗");
         println!("║          ENEMY TURN                    ║");
         println!("╚════════════════════════════════════════╝");
-        let damage = enemy.attack();
-        println!("💥 {} attacks for {} damage!", enemy.get_name(), damage);
+
+        let mut rng = rand::rng();
+        let base_damage = enemy.attack();
+        let variance = rng.random_range(0.8..=1.2);
+        let mut damage = (base_damage as f32 * variance) as u32;
+
+        // Enemy critical hit chance (lower than player)
+        let crit_chance = rng.random_range(1..=100);
+        if crit_chance > 92 {
+            damage = (damage as f32 * 1.5) as u32;
+            println!(
+                "\n\x1b[91m⚡ {} lands a CRITICAL HIT! ⚡\x1b[0m",
+                enemy.get_name()
+            );
+            println!("💥 You take \x1b[91m{} damage!\x1b[0m", damage);
+        } else {
+            println!("💥 {} attacks for {} damage!", enemy.get_name(), damage);
+        }
         player.take_damage(damage);
 
         // Check if player is defeated
@@ -311,6 +432,100 @@ fn use_health_potion(player: &mut Box<dyn Fighter>, inventory: &mut Vec<Item>) -
         true
     } else {
         false
+    }
+}
+
+fn use_inventory_menu(player: &mut Box<dyn Fighter>, inventory: &mut Vec<Item>, gold: u32) {
+    loop {
+        println!("\n┌────────────────────────────────────────┐");
+        println!("│  🎒 INVENTORY                          │");
+        println!("├────────────────────────────────────────┤");
+        println!("│  💰 Gold: {:<30}│", format!("{} coins", gold));
+        println!(
+            "│  ❤️  Health: {:<28}│",
+            format!("{}/{}", player.get_health(), player.get_max_health())
+        );
+        println!("├────────────────────────────────────────┤");
+
+        if inventory.is_empty() {
+            println!("│  (Empty)                               │");
+            println!("├────────────────────────────────────────┤");
+            println!("│  [0] Back to Menu                      │");
+            println!("└────────────────────────────────────────┘");
+            print!("\n➤ Press 0 to go back: ");
+            let _ = io::stdout().flush();
+            let mut input = String::new();
+            let _ = io::stdin().read_line(&mut input);
+            return;
+        }
+
+        for (i, item) in inventory.iter().enumerate() {
+            let usable = match item.name() {
+                "Health Potion" => {
+                    if player.get_health() < player.get_max_health() {
+                        "✓ Use"
+                    } else {
+                        "✗ Full HP"
+                    }
+                }
+                _ => "View",
+            };
+            println!("│  [{}] {:<25} {:>7} │", i + 1, item.name(), usable);
+        }
+
+        println!("├────────────────────────────────────────┤");
+        println!("│  [0] Back to Menu                      │");
+        println!("└────────────────────────────────────────┘");
+        print!("\n➤ Choose item to use (or 0 to go back): ");
+        let _ = io::stdout().flush();
+
+        let max_choice = inventory.len() as u32;
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() {
+            eprintln!("Failed to read input");
+            continue;
+        }
+
+        match input.trim().parse::<u32>() {
+            Ok(0) => return, // Back to menu
+            Ok(num) if num >= 1 && num <= max_choice => {
+                let index = (num - 1) as usize;
+                let item = &inventory[index];
+
+                match item.name() {
+                    "Health Potion" => {
+                        if player.get_health() >= player.get_max_health() {
+                            println!("\n⚠️  You're already at full health!");
+                            std::thread::sleep(std::time::Duration::from_millis(1000));
+                            continue;
+                        }
+                        const POTION_HEAL: u32 = 30;
+                        inventory.remove(index);
+                        player.heal(POTION_HEAL);
+                        println!(
+                            "\n✨ You drink the Health Potion and restore {} HP!",
+                            POTION_HEAL
+                        );
+                        println!(
+                            "   Current Health: {}/{}",
+                            player.get_health(),
+                            player.get_max_health()
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                    }
+                    _ => {
+                        println!("\n📜 {}", item.name());
+                        println!("   Value: {} gold", item.value());
+                        println!("   This item cannot be used right now.");
+                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                    }
+                }
+            }
+            _ => {
+                println!("Invalid choice. Please try again.");
+                std::thread::sleep(std::time::Duration::from_millis(800));
+            }
+        }
     }
 }
 
