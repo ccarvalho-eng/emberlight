@@ -46,9 +46,20 @@ impl Item {
             ];
             let item = items[rng.random_range(0..items.len())];
             Item::new(item.0.to_string(), item.1)
-        } else {
-            // Health potion (most common)
+        } else if loot_roll > 25 {
+            // Health potion
             Item::new("Health Potion".to_string(), 50)
+        } else {
+            // Resource potion
+            Item::new("Energy Potion".to_string(), 40)
         }
+    }
+
+    pub fn is_health_potion(&self) -> bool {
+        self.name == "Health Potion"
+    }
+
+    pub fn is_energy_potion(&self) -> bool {
+        self.name == "Energy Potion"
     }
 }

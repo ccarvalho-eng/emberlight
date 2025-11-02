@@ -32,13 +32,17 @@ fn run_game() -> Result<()> {
     player_character.introduce();
 
     // Give starting items
-    println!("\nYou receive a Health Potion!");
+    println!("\nYou receive a Health Potion and an Energy Potion!");
 
     const STARTING_GOLD: u32 = 50;
     const POTION_VALUE: u32 = 50;
+    const ENERGY_POTION_VALUE: u32 = 40;
 
     let mut gold = STARTING_GOLD;
-    let mut inventory = vec![Item::new(String::from("Health Potion"), POTION_VALUE)];
+    let mut inventory = vec![
+        Item::new(String::from("Health Potion"), POTION_VALUE),
+        Item::new(String::from("Energy Potion"), ENERGY_POTION_VALUE),
+    ];
 
     println!("\n=== Your Adventure Begins! ===\n");
 
@@ -445,6 +449,11 @@ fn use_inventory_menu(player: &mut Box<dyn Fighter>, inventory: &mut Vec<Item>, 
             "│  ❤️  Health: {:<28}│",
             format!("{}/{}", player.get_health(), player.get_max_health())
         );
+        println!(
+            "│  ⚡ {}: {:<24}│",
+            player.get_resource_name(),
+            format!("{}/{}", player.get_resource(), player.get_max_resource())
+        );
         println!("├────────────────────────────────────────┤");
 
         if inventory.is_empty() {
@@ -460,15 +469,20 @@ fn use_inventory_menu(player: &mut Box<dyn Fighter>, inventory: &mut Vec<Item>, 
         }
 
         for (i, item) in inventory.iter().enumerate() {
-            let usable = match item.name() {
-                "Health Potion" => {
-                    if player.get_health() < player.get_max_health() {
-                        "✓ Use"
-                    } else {
-                        "✗ Full HP"
-                    }
+            let usable = if item.is_health_potion() {
+                if player.get_health() < player.get_max_health() {
+                    "✓ Use"
+                } else {
+                    "✗ Full HP"
                 }
-                _ => "View",
+            } else if item.is_energy_potion() {
+                if player.get_resource() < player.get_max_resource() {
+                    "✓ Use"
+                } else {
+                    "✗ Full"
+                }
+            } else {
+                "View"
             };
             println!("│  [{}] {:<25} {:>7} │", i + 1, item.name(), usable);
         }
@@ -492,33 +506,58 @@ fn use_inventory_menu(player: &mut Box<dyn Fighter>, inventory: &mut Vec<Item>, 
                 let index = (num - 1) as usize;
                 let item = &inventory[index];
 
-                match item.name() {
-                    "Health Potion" => {
-                        if player.get_health() >= player.get_max_health() {
-                            println!("\n⚠️  You're already at full health!");
-                            std::thread::sleep(std::time::Duration::from_millis(1000));
-                            continue;
-                        }
-                        const POTION_HEAL: u32 = 30;
-                        inventory.remove(index);
-                        player.heal(POTION_HEAL);
-                        println!(
-                            "\n✨ You drink the Health Potion and restore {} HP!",
-                            POTION_HEAL
-                        );
-                        println!(
-                            "   Current Health: {}/{}",
-                            player.get_health(),
-                            player.get_max_health()
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                if item.is_health_potion() {
+                    if player.get_health() >= player.get_max_health() {
+                        println!("\n⚠️  You're already at full health!");
+                        std::thread::sleep(std::time::Duration::from_millis(1000));
+                        continue;
                     }
-                    _ => {
-                        println!("\n📜 {}", item.name());
-                        println!("   Value: {} gold", item.value());
-                        println!("   This item cannot be used right now.");
-                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                    const POTION_HEAL: u32 = 30;
+                    inventory.remove(index);
+                    player.heal(POTION_HEAL);
+                    println!(
+                        "\n✨ You drink the Health Potion and restore {} HP!",
+                        POTION_HEAL
+                    );
+                    println!(
+                        "   Current Health: {}/{}",
+                        player.get_health(),
+                        player.get_max_health()
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                } else if item.is_energy_potion() {
+                    if player.get_resource() >= player.get_max_resource() {
+                        println!("\n⚠️  Your {} is already full!", player.get_resource_name());
+                        std::thread::sleep(std::time::Duration::from_millis(1000));
+                        continue;
                     }
+                    const RESOURCE_RESTORE: u32 = 40;
+                    let resource_name = player.get_resource_name().to_string();
+                    inventory.remove(index);
+
+                    let current = player.get_resource();
+                    let max = player.get_max_resource();
+                    let new_resource = (current + RESOURCE_RESTORE).min(max);
+                    let actual_restore = new_resource - current;
+
+                    player.set_resource(new_resource);
+
+                    println!(
+                        "\n✨ You drink the Energy Potion and restore {} {}!",
+                        actual_restore, resource_name
+                    );
+                    println!(
+                        "   Current {}: {}/{}",
+                        resource_name,
+                        player.get_resource(),
+                        player.get_max_resource()
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                } else {
+                    println!("\n📜 {}", item.name());
+                    println!("   Value: {} gold", item.value());
+                    println!("   This item cannot be used right now.");
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
                 }
             }
             _ => {
@@ -569,18 +608,32 @@ fn show_and_use_inventory(player: &mut Box<dyn Fighter>, inventory: &mut Vec<Ite
                 let index = (num - 1) as usize;
                 let item = &inventory[index];
 
-                match item.name() {
-                    "Health Potion" => {
-                        const POTION_HEAL: u32 = 30;
-                        inventory.remove(index);
-                        player.heal(POTION_HEAL);
-                        println!("\n✨ You used a Health Potion!");
-                        return true; // Item used, end turn
-                    }
-                    _ => {
-                        println!("\n⚠️  You can't use that item right now!");
-                        continue;
-                    }
+                if item.is_health_potion() {
+                    const POTION_HEAL: u32 = 30;
+                    inventory.remove(index);
+                    player.heal(POTION_HEAL);
+                    println!("\n✨ You used a Health Potion!");
+                    return true; // Item used, end turn
+                } else if item.is_energy_potion() {
+                    const RESOURCE_RESTORE: u32 = 40;
+                    let resource_name = player.get_resource_name().to_string();
+                    inventory.remove(index);
+
+                    let current = player.get_resource();
+                    let max = player.get_max_resource();
+                    let new_resource = (current + RESOURCE_RESTORE).min(max);
+
+                    player.set_resource(new_resource);
+
+                    println!(
+                        "\n✨ You used an Energy Potion! Restored {} {}!",
+                        new_resource - current,
+                        resource_name
+                    );
+                    return true; // Item used, end turn
+                } else {
+                    println!("\n⚠️  You can't use that item right now!");
+                    continue;
                 }
             }
             _ => {
